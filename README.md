@@ -6,6 +6,8 @@ Started as a basic connectivity demo; now a continuous 4-antenna
 mapping tool for characterizing bag detection zones on/around the
 cornhole board layout.
 
+Craig Anderson
+
 ## What it does
 
 1. On boot, sends **Obtain reader information** (Cmd `0x21`) and
