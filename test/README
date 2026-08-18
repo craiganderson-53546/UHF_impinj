@@ -1,0 +1,4 @@
+This directory is intended for PlatformIO unit tests (PlatformIO Unit Testing).
+Not used yet in this project -- protocol validation so far has been done via
+the bench_test.py / bench_test_tcp.py / rru_netconfig.py scripts against real
+hardware rather than PlatformIO's on-device test runner.

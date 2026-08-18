@@ -1,0 +1,7 @@
+This directory is intended for project specific (private) libraries.
+PlatformIO will compile them to static libraries and link into the executable file.
+
+Not used in this project currently -- rru7182m.h/.cpp live in include/ and src/
+since it's a single small protocol header, not a standalone library. Drop
+project-specific libraries here if the project grows (e.g. a separate library
+for the cornhole scoring web UI or load-cell integration).
