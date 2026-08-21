@@ -1,0 +1,31 @@
+2. Dry run first:
+
+python rru_netconfig.py set-ip 192.168.4.190 --new-ip 192.168.86.190 --netmask 255.255.255.0 --gateway 192.168.86.1
+
+Review the "Proposed changes" output — confirm IP/netmask/gateway are what you expect and every other field shows as unchanged.
+
+3. Apply it:
+
+python rru_netconfig.py set-ip 192.168.4.190 --new-ip 192.168.86.190 --netmask 255.255.255.0 --gateway 192.168.4.1 --apply
+
+Type APPLY when prompted.
+
+4. Verify — and you can drop the dongle for this step, since 192.168.4.190 is on your normal Wi-Fi network now:
+
+python rru_netconfig.py query 192.168.4.190
+
+static const char *WIFI_SSID = "CIA-Router";
+static const char *WIFI_PASSWORD = "R0ckstar99";
+static const IPAddress READER_IP(192, 168, 86, 190);  // reconfigured via rru_netconfig.py
+
+P:\UHF_impinj\cornhole-rfid-rru7182m\analysis\antenna_mapping_analysis.ipynb
+
+python rru_netconfig.py set-ip 192.168.86.190 --new-ip 192.168.4.190 --netmask 255.255.252.0 --gateway 192.168.4.1
+
+python rru_netconfig.py set-ip 192.168.86.190 --new-ip 192.168.4.190 --netmask 255.255.252.0 --gateway 192.168.4.1 --apply
+
+
+static const char *WIFI_SSID = "tdshome";
+static const char *WIFI_PASSWORD = "paranoid";
+static const IPAddress READER_IP(192, 168, 4, 190);  // reconfigured via rru_netconfig.py
+

@@ -6,8 +6,6 @@ Started as a basic connectivity demo; now a continuous 4-antenna
 mapping tool for characterizing bag detection zones on/around the
 cornhole board layout.
 
-Craig Anderson
-
 ## What it does
 
 1. On boot, sends **Obtain reader information** (Cmd `0x21`) and
@@ -184,17 +182,200 @@ that check never got carried back into this C++ function, which is
 why it went unnoticed until real hardware exposed it. Fixed; now also
 prints the antenna mask and raw frequency-band bits for completeness.
 
+## Bugs found and fixed after moving to a new network
+
+On a different network (same physical setup, different IP), startup
+showed a cluster of mixed timeouts, failed antenna switches, and a
+"Response too large for buffer" error, then self-recovered after a
+few seconds — plus the reader was audibly beeping. Three separate
+things going on, diagnosed rather than just patched over:
+
+- **The buzzer beeping is meaningful, not a fault alert.** Confirmed
+  from the manual (Section 8.4.9): it beeps on every *successful* tag
+  read. Continuous beeping means the reader is genuinely, repeatedly
+  detecting something — worth checking for a tag or tag-like object
+  left in range, since that directly explains the next two points.
+- **`respFrame[MAX_FRAME_LEN]` was sized at 255 bytes, but the true
+  worst case is 256** (1 Len byte + up to 255 more, since Len's value
+  already accounts for the rest of the frame). A large response —
+  exactly what a backlog of repeated tag detections would produce —
+  overflowed that by one byte. Fixed via a new `MAX_TOTAL_FRAME_BYTES`
+  constant (`rru7182m.h`), used for the inventory response buffer.
+- **The RS232 manual's <15ms inter-byte gap requirement was being
+  applied to TCP too.** TCP can legitimately deliver one logical frame
+  across multiple network segments with larger gaps, especially a
+  large frame on a network with different latency than the one this
+  was bench-tested on. When that gap check fired mid-frame, the
+  function returned immediately *without draining the rest of that
+  frame's bytes still in flight* — so the next call read one of those
+  stale bytes as if it were a fresh Len byte, misaligning parsing
+  entirely. That explains the specific pattern observed: different
+  commands failing back-to-back in a burst, then recovering on their
+  own once alignment happened to resync by chance. Fixed two ways:
+  `INTERBYTE_TIMEOUT_MS` is now transport-conditional (300ms for TCP,
+  the original 15ms preserved for RS232), and a new
+  `drainStaleBytes()` helper is called from every failure exit of
+  `sendAndReceive()` to actively consume lingering bytes before the
+  next exchange, rather than relying on chance resync.
+
+**Also improved while in there:** a `STATUS_0x03` ("more buffered
+results than fit in this frame") response was previously discarded
+entirely, throwing away real tag data that *did* fit in the frame just
+to avoid dealing with the unfetched remainder. Now parses and prints
+what's present, with a note that the remainder wasn't fetched. Full
+continuation-frame fetching still isn't implemented — worth doing
+properly once real gameplay means multiple tagged bags in the field
+at once, since `0x03` will then be routine, not an edge case.
+
+**Confirmed real tag, and a fourth issue found on the next test run.**
+The buzzer theory checked out — `302832AB0CE502869172838A` came through
+cleanly on all 4 antennas (RSSI 56-63). But timeout/failed-switch churn
+was still substantial even with the fixes above, pointing at something
+beyond TCP framing. The manual states directly: "an unreasonable short
+inventory time setting may cause tag inventory failure" (Section
+8.2.1) — and the scan time was set to `0x03` (300ms), the documented
+*minimum* of the valid range, specifically chosen for a responsive
+mapping cycle. Combined with a real tag being continuously, rapidly
+detected (heavy internal buffering), this is very likely the dominant
+cause of the instability, not just a secondary factor. Backed off to
+`MAPPING_SCAN_TIME_100MS = 0x08` (800ms), with `RESPONSE_TIMEOUT_MS`
+raised to 1500ms to match — these two are coupled (response can't
+possibly arrive before the scan itself completes, plus the manual
+notes actual scan time can run up to 75ms over the configured value),
+so changing one without the other will make every exchange fail by
+construction. Not yet re-validated against real hardware at time of
+writing — first thing to check on the next run.
+
+**That re-validation surfaced a different, more specific pattern**:
+exactly one successful exchange (reader info) after connecting, then
+every single subsequent command failed, with no recovery in the whole
+log window — a tighter signature than general timing pressure. Most
+likely explanation: the TCP connection went dead-in-practice (reader
+silently stopped answering without sending a FIN/RST), which
+`reader.connected()` can't detect on its own since the socket-level
+state still looks fine. Root cause not yet fully confirmed — an RS232
+test would help isolate whether this is TCP/WiFi-stack-specific or a
+reader-side command-processing issue, independent of transport (see
+"WiFi/TCP transport" section for the transport switch).
+
+Regardless of root cause, the firmware had no way to recover from this
+state on its own, which is a real gap for anything meant to run
+unattended. Added: `inventoryOnceCSV()` and the antenna-switch call in
+`runMappingCycle()` now feed a consecutive-failure counter
+(`MAX_CONSECUTIVE_FAILURES = 6`, roughly one full antenna cycle); if
+exceeded, the code forces `reader.stop()` (WiFi/TCP only) and resets
+`readerOnline`/`mappingModeReady`, so `loop()` re-establishes the
+connection from scratch — including re-fetching reader info and
+re-setting scan time — rather than looping forever against a
+connection nothing will ever answer on again.
+
 ## Antenna mapping mode
 
-`main.cpp` now runs a continuous antenna-mapping cycle instead of the
-earlier single-antenna connectivity demo: it steps through all 4
-antennas one at a time (Cmd `0x3F`, "Setup antenna multiplexing"),
-runs a single-antenna inventory pass on each (Cmd `0x01`), and streams
-CSV over the USB serial console:
+`main.cpp` runs a continuous antenna-mapping cycle instead of the
+earlier single-antenna connectivity demo: it steps through antennas
+one at a time (Cmd `0x3F`, "Setup antenna multiplexing"), runs a
+single-antenna inventory pass on each (Cmd `0x01`), and streams CSV
+over the USB serial console:
 
 ```
 timestamp_ms,label,antenna,epc,rssi
 ```
+
+**Currently limited to antenna 1 only** (`MAPPING_SINGLE_ANTENNA_ONLY`
+in `main.cpp`, set to `1`) while confirming comms reliability with
+fewer variables in play. Set it to `0` to resume cycling through all 4
+antennas once satisfied with stability.
+
+**RF power is set to 10 at startup** (`MAPPING_RF_POWER`, non-persistent
+— overrides the reader's own configured 33/~2W for this session only).
+Originally added to test whether a foil-wrapped tag in another room
+was genuinely still being read over the air (a lot of transmit power
+paired with a sensitive receiver can punch through casual shielding
+and an interior wall more easily than intuition suggests), but it's
+not just a diagnostic value — lower power should also shrink the
+off-board false-read radius, which is the actual point of the mapping
+exercise, and it directly helps battery life for field deployment
+(current draw scales steeply with power). Once real mapping data says
+what the board actually needs, update `MAPPING_RF_POWER` to that value
+instead of this test number. Valid range is 0-30 — this is a linear
+scale, not a percentage, so "10" is roughly a third of max, not "10%."
+
+**`rf_power` is now a real column in the CSV output**, not just a
+firmware constant to remember separately — every row records the power
+level it was captured at. This means sessions collected at different
+power levels can be loaded into the analysis notebook together and
+compared directly, which is exactly what's needed to answer "what's
+the lowest power that still covers the board." See
+`analysis/TESTING_STRATEGY.md`'s "RF power sweep" section for the
+procedure, and Section 7 of the notebook for the resulting
+coverage-vs-power comparison. Older CSVs collected before this change
+won't have the column — the notebook flags and skips them rather than
+guessing a value.
+
+**EPC Gen2 Session changed from S0 to S1** (in `inventoryOnceCSV()`).
+Cause: the manual confirms a tag read multiple times within one
+inventory pass isn't deduplicated, and with the current 2.0s scan
+window, a reliably-present tag was getting read dozens of times per
+pass — filling the response frame with repeats of the same tag,
+which is exactly why the `STATUS_0x03` "more buffered results" note
+was showing up on essentially every detection. Harmless for single-tag
+testing, but a real risk once multiple different tagged bags are in
+play simultaneously: one tag's repeats could fill the frame before a
+second, genuinely different tag ever gets reported. S1 makes an
+already-read tag go quiet for the rest of that window (standard Gen2
+behavior), freeing frame capacity for other distinct tags.
+
+Tradeoff: S1's quiet period is a real-time timer on the tag itself,
+not reset between back-to-back inventory calls during continuous
+mapping-mode polling — a tag read near the end of one call may still
+read as quiet at the start of the next, which can show up as extra
+`NONE` results specifically in this continuous-polling test pattern.
+Not a problem for the actual deployment use case (one on-demand read
+at end of round, not continuous polling) — just don't mistake an
+uptick in `NONE` rows during mapping-mode testing for a regression in
+the scan-time work above; it's this tradeoff, not a new bug.
+
+**Fixed a silent-failure gap in `setAntennaMultiplexing()` /
+`setInventoryScanTime()` / `setRFPower()`.** A `# WARNING: failed to
+switch to antenna N` with no `[RRU] ...` diagnostic line before it
+meant the frame was received completely and cleanly at the transport
+level — `sendAndReceive()` already logs every timeout/oversized/
+gap-exceeded failure it detects, and none of those fired. The actual
+failure was happening silently one layer up: these three functions
+returned `false` on a CRC/format mismatch or an unexpected
+`reCmd`/`status` without ever printing why, making every such failure
+indistinguishable from every other. Most likely explanation for this
+specific pattern: a large inventory response (common under the old
+Session S0 duplicate-heavy responses) leaving trailing bytes that the
+very next, smaller exchange misreads as its own response start — the
+same class of issue as the earlier TCP inter-byte-gap desync fix, just
+a case that fix didn't catch since the frame the *following* command
+read was still fully well-formed by our size check, just not the
+content expected. All three functions now print the raw response
+bytes on a CRC/format failure, and the actual `reCmd`/`status`
+received vs. expected on a mismatch — if it's stale data, this will
+show a `reCmd` matching a previous command (e.g. `0x01` where `0x3F`
+was expected) rather than garbage, confirming the theory directly
+instead of leaving it as a guess.
+
+**Confirmed on real hardware, and root-caused, not just diagnosed.**
+The new logging immediately caught it: `unexpected reCmd=0x01
+status=0x01 (wanted reCmd=0x3F status=0x00)` — a complete, CRC-valid
+`CMD_TAG_INVENTORY`/`STATUS_OK` response arriving where the antenna-mux
+response was expected. Not corruption; a genuine leftover response to
+the *previous* command. The reader appears to push backlogged data
+(the remainder behind a `STATUS_0x03` response) unprompted, shortly
+after the initial response, without ever being asked for a
+continuation — late enough to land in the gap between
+`sendAndReceive()`'s instantaneous start-of-call flush and sending the
+next command, where it then gets misread as that command's response.
+
+Fixed by closing the race rather than continuing to detect it after
+the fact: the start-of-call flush now waits for a genuine 100ms quiet
+window (reusing `drainStaleBytes()`) instead of just flushing whatever
+happens to be sitting in the buffer at that instant. Adds up to 100ms
+per command, which is a non-issue given there's no latency requirement
+for this system (see the `MAPPING_SCAN_TIME_100MS` reasoning above).
 
 One row per tag found each cycle, or a `NONE` row if nothing found
 (so the log stays a dense, uniform time series). Type a label + Enter
@@ -217,20 +398,35 @@ analysis. You can also type labels directly into that script's console
 instead of the PlatformIO monitor — it forwards them to the ESP32
 the same way.
 
-**Two things not yet bench-validated** (no tag on hand yet at time of
-writing):
+**One thing not yet bench-validated:**
 - **50ms settle delay** after switching antennas, before running
   inventory — not documented anywhere in the manual, a conservative
   guess. If antenna N's readings look like they're bleeding over from
   antenna N-1 right after a switch, increase this; if data looks clean
   without it, it can come down.
-- **300ms inventory scan time** (`0x03`, the manual's stated minimum)
-  — chosen for a responsive mapping cycle, but shorter scan time may
-  reduce read reliability. If reads look flaky/inconsistent, try a
-  longer scan time and accept the slower full-cycle rate.
 
-Both are simple constants to tune (`delay(50)` in `runMappingCycle()`,
-`setInventoryScanTime(0x03)` in `loop()`) once real data is in hand.
+**Scan time history:** 300ms (`0x03`, the documented minimum) produced
+widespread timeouts and failed antenna switches once a real tag was
+present and being repeatedly detected — the manual directly warns
+short scan times can cause this. Backed off to 800ms, which fixed the
+timeouts. Then reconsidered entirely: this system only reads at the
+end of a round, not continuously, so there's no latency requirement to
+optimize for in the first place — a short scan trades reliability for
+responsiveness that isn't needed here, and single-shot misses in the
+CSV log (alternating `NONE`/detected) were really just a symptom of
+too little time-per-scan for EPC Gen2's anti-collision slotting to
+consistently catch the tag, not a bug. Now `MAPPING_SCAN_TIME_100MS =
+0x14` (2.0s), with `RESPONSE_TIMEOUT_MS` raised to match — the two are
+coupled, not independent tunables; see the comment above
+`MAPPING_SCAN_TIME_100MS` in `main.cpp` before changing either one.
+Push higher (documented max `0xFF`/25.5s) if `NONE` results are still
+frequent — see that comment for the full reasoning, including why this
+isn't guaranteed to eliminate every miss (momentary RF fades are a
+separate, real phenomenon a longer window helps but doesn't fully
+prevent). Dwell-time guidance in `analysis/TESTING_STRATEGY.md` was
+updated to match this pacing.
+
+The `delay(50)` settle constant is in `runMappingCycle()`.
 
 ## Testing strategy and analysis notebook
 

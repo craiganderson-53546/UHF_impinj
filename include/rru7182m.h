@@ -41,6 +41,7 @@ namespace rru7182m {
 // ---- Reader-customised command codes (Section 8.4) ----
 constexpr uint8_t CMD_TAG_INVENTORY          = 0x01; // Section 8.2.1
 constexpr uint8_t CMD_MODIFY_INVENTORY_TIME  = 0x25; // Section 8.4.4
+constexpr uint8_t CMD_MODIFY_RF_POWER        = 0x2F; // Section 8.4.6, Format 1
 constexpr uint8_t CMD_SETUP_ANTENNA_MUX      = 0x3F; // Section 8.4.8, Format 1
 constexpr uint8_t CMD_OBTAIN_READER_INFO     = 0x21; // Section 8.4.1
 
@@ -54,6 +55,13 @@ constexpr uint8_t ANT4_BIT = 0x08;
 // gets written to persistent flash.
 constexpr uint8_t ANT_CONFIG_NOT_PERSISTED = 0x80;
 
+// ---- RF power "Pwr" byte (CMD_MODIFY_RF_POWER, Format 1) ----
+// bit0-6: power level, valid range 0-30 (30 ~= 1W output).
+// bit7: 0 = preserve across power-off, 1 = don't -- same meaning and
+// same bit position as ANT_CONFIG_NOT_PERSISTED above, kept as a
+// separate named constant since it's a different command's field.
+constexpr uint8_t POWER_CONFIG_NOT_PERSISTED = 0x80;
+
 // ---- Response status codes relevant to this demo (Section 5, 8.2.1) ----
 constexpr uint8_t STATUS_OK                  = 0x00; // generic command success
 constexpr uint8_t STATUS_INVENTORY_OK        = 0x01; // inventory completed
@@ -66,6 +74,13 @@ constexpr uint8_t BROADCAST_ADDR             = 0xFF;
 constexpr uint8_t DEFAULT_READER_ADDR        = 0x00;
 
 constexpr size_t MAX_FRAME_LEN = 255; // Len field is 1 byte, max value 255
+// Max total bytes on the wire for one frame: the Len byte itself, plus
+// everything Len's value accounts for (Len already covers Adr/Cmd or
+// Adr/reCmd/Status/Data/CRC, per the frame layout above). So worst case
+// is 1 + 255 = 256, not 255 -- buffers sized directly off MAX_FRAME_LEN
+// were one byte short of the true worst case, confirmed the hard way
+// against a large real response (see README).
+constexpr size_t MAX_TOTAL_FRAME_BYTES = MAX_FRAME_LEN + 1;
 
 // ---------------------------------------------------------------------
 // CRC16 exactly as specified in the manual (Section 3.2), reflected

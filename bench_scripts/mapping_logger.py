@@ -5,7 +5,7 @@ ready for pandas/matplotlib analysis (e.g. building an RSSI heatmap per
 antenna across board positions).
 
 The firmware prints:
-    timestamp_ms,label,antenna,epc,rssi
+    timestamp_ms,label,antenna,rf_power,epc,rssi
 one row per tag found each cycle (or a "NONE" row if nothing found), plus
 occasional "# ..." comment/warning lines. This script passes data rows
 straight through to the CSV file, prints comment lines to the console for
@@ -91,7 +91,7 @@ def main():
                     continue
 
                 fields = line.split(",")
-                if len(fields) != 5:
+                if len(fields) != 6:
                     print(f"(unrecognized line, skipped) {line}")
                     continue
 

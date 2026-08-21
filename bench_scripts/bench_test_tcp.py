@@ -21,6 +21,11 @@ FRAMES = {
     "info": bytes([0x04, 0x00, 0x21, 0xD9, 0x6A]),
     # Len=0x06, Adr=0x00, Cmd=0x01 (tags inventory), Data=[QValue=0x04, Session=0x00]
     "inventory": bytes([0x06, 0x00, 0x01, 0x04, 0x00, 0xAC, 0x36]),
+    # Len=0x05, Adr=0x00, Cmd=0x2F Format 1 (modify RF power), Data=[Pwr=10, bit7=1 non-persistent]
+    # Diagnostic: is a foil-wrapped/distant tag still readable at much lower power?
+    "power_low": bytes([0x05, 0x00, 0x2F, 0x8A, 0xDF, 0xE6]),
+    # Same command, Pwr=33 (current normal setting) -- run this after power_low to restore.
+    "power_restore": bytes([0x05, 0x00, 0x2F, 0xA1, 0x0E, 0x79]),
 }
 
 

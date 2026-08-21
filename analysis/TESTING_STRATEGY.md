@@ -60,14 +60,19 @@ is where the real decision boundary lives.
 2. Type the position label (`x<X>_y<Y>`) into the serial console
    (PlatformIO monitor or `mapping_logger.py`'s console — both forward
    typed text to the ESP32 the same way).
-3. **Dwell at least 10 seconds** before moving to the next position.
-   At the mapping firmware's current settings (~300ms scan time per
-   antenna, ~50ms settle, roughly 1.5-2.5s per full 4-antenna cycle
-   depending on comms overhead), this yields several samples per
-   antenna at that position — important because EPC Gen2's
-   anti-collision slotting means a tag well within range still won't
-   answer *every* query, so single-shot reads are noisy. More samples
-   also let the notebook's `detection_rate` metric mean something.
+3. **Dwell at least 20 seconds** before moving to the next position.
+   Scan time is currently 2.0s per antenna (`MAPPING_SCAN_TIME_100MS`
+   in `main.cpp`) — deliberately generous, since this system only
+   needs to read at the end of a round, not continuously, so there's
+   no reason to trade reliability for responsiveness here. A full
+   4-antenna cycle runs roughly 9-10s depending on comms overhead, so
+   a 20s dwell comfortably covers 2+ full cycles, giving several
+   samples per antenna at that position — worth keeping even with a
+   longer per-scan window, since EPC Gen2's anti-collision slotting
+   and momentary RF fades mean even a well-placed tag won't register
+   on literally every cycle. More samples also let the notebook's
+   `detection_rate` metric mean something rather than being a
+   single noisy coin flip.
 4. Move to the next position and repeat.
 
 ## Tag orientation
@@ -90,10 +95,49 @@ form-factor, or accepting some orientation-dependent blind spots.
   objects (folding chairs, coolers, etc.) that could reflect or
   attenuate RF — cornhole is often played outdoors, and reflective
   surfaces can behave differently than a clean bench test.
-- Keep the reader's settings (RF power, scan time, Q-value) constant
-  across a full session; if you deliberately change one to test its
-  effect, start a new labeled session/file rather than mixing settings
-  mid-dataset — the notebook doesn't currently track per-row settings.
+- Keep scan time and Q-value constant across a full session. RF power
+  is the one setting you'll deliberately vary between sessions — see
+  below — since it's now recorded per-row in the CSV itself and the
+  notebook is built to compare across it directly.
+
+## RF power sweep
+
+Unlike scan time and Q-value, RF power is worth deliberately varying
+across multiple full sessions, because the actual goal is finding the
+lowest power that still reliably covers the board — lower power both
+tightens the off-board false-read radius and meaningfully extends
+battery life for field deployment.
+
+**Scale note:** the reader's valid range is 0-30 (not a percentage —
+a setting of 10 is roughly a third of max power, not "10%"). The
+reader's own configured default is 33, which is actually outside that
+documented range (~2W); the mapping firmware overrides this at startup
+via `MAPPING_RF_POWER` in `main.cpp`.
+
+**Procedure:**
+
+1. Set `MAPPING_RF_POWER` to a chosen value, reflash, and run a full
+   mapping session (Phase A grid at minimum) — `rf_power` is captured
+   automatically in every row, so there's no need to track it
+   separately or keep sessions in different folders.
+2. Repeat at 2-4 more power levels, spanning a reasonable range (e.g.
+   10, 15, 20, 25) — you don't need to test every value, just enough
+   points to see the trend.
+3. Load all the sessions together in the notebook (they merge
+   automatically) and check Section 7, "Coverage vs. power level" —
+   it plots on-board detection rate against off-board detection rate
+   (false-read risk) across every power level in your data. The power
+   where on-board coverage starts dropping meaningfully, or where
+   off-board bleed stops improving much further, is your practical
+   floor.
+4. Once you've picked a value, that's what `MAPPING_RF_POWER` should
+   be set to going forward — not the diagnostic value (10) used while
+   debugging comms earlier this session.
+
+Older CSV files collected before this notebook version won't have an
+`rf_power` column — the notebook flags and skips these automatically
+rather than guessing a value, so they need to be re-collected if you
+want them included in a comparison.
 
 ## What "done" looks like
 
@@ -106,11 +150,13 @@ open `antenna_mapping_analysis.ipynb`. You're looking for:
 - A visible gap between on-board and off-board RSSI distributions
   (Section 5) — if the histograms overlap heavily, that's the signal
   to either accept a wider tolerance, shorten scan time, lower RF
-  power (once that firmware command exists — not yet implemented as
-  of this session), or reconsider antenna placement/angle.
+  power (see the power sweep above), or reconsider antenna
+  placement/angle.
 - The effective-coverage plot (Section 6) roughly matching the true
   board rectangle at your chosen threshold, with false positives/
   negatives called out explicitly in the printed counts.
+- If you've run the power sweep, a clear knee in the coverage-vs-power
+  plot (Section 7) — that's your practical power floor.
 
 If Phase A alone gives a clean answer, Phase B may not be necessary —
 but for tuning a real threshold with confidence, the boundary-focused
