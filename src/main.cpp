@@ -82,8 +82,8 @@ using namespace rru7182m;
 #define RRU_USE_WIFI_TRANSPORT 1
 
 #if RRU_USE_WIFI_TRANSPORT
-static const char *WIFI_SSID = "tdshome";
-static const char *WIFI_PASSWORD = "paranoid";
+static const char *WIFI_SSID = "";
+static const char *WIFI_PASSWORD = "";
 static const IPAddress READER_IP(192, 168, 4, 190);  // reconfigured via rru_netconfig.py
                                                        // to live on this network -- was
                                                        // 192.168.1.190 (factory default)
